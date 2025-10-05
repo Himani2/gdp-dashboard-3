@@ -265,6 +265,7 @@ db_host = "database-1.cs9ycq6ishdm.us-east-1.rds.amazonaws.com"
 db_port = "5432"  # default PostgreSQL port
 db_name = "capstone_project"
 
+
 DB_URI = f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
 DATA_PATH = "data"
 os.makedirs(DATA_PATH, exist_ok=True)
