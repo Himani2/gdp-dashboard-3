@@ -248,10 +248,10 @@ import pandas as pd
 # import yfinance as yf
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
-import numpy as np
+# import numpy as np
 import plotly.express as px
 import os
-import random
+# import random
 
 # ------------------------------------------------------------------------------
 # APP CONFIG

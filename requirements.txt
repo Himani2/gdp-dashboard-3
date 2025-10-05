@@ -1,7 +1,6 @@
 streamlit
 pandas
+psycopg2-binary
 sqlalchemy
 matplotlib
-psycopg2-binary
 plotly
-numpy
