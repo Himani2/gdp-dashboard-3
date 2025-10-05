@@ -13,6 +13,7 @@ import requests
 # --------------------------
 st.set_page_config(page_title="Indian Stock Monitor", page_icon="📈", layout="wide")
 
+
 # --------------------------
 # DATABASE CONFIG
 # --------------------------
@@ -52,6 +53,9 @@ def load_or_fetch(table_name: str):
 
     st.error(f"❌ No data available for {table_name}")
     return pd.DataFrame()
+
+    
+
 # --------------------------
 # LOAD TABLES
 # --------------------------
@@ -90,6 +94,25 @@ col_main, col_chat = st.columns([3, 1])  # 75% main, 25% chat
 # --------------------------
 with col_main:
     st.title("📊 Indian Stock Dashboard")
+
+    # # CHATBOT (basic rule-based)
+# # ------------------------------------------------------------------------------
+
+st.subheader("💬 Stock Chatbot")
+query = st.text_input("Ask about any stock:")
+if query:
+    query = query.upper()
+    if query in all_symbols:
+        rec = pred_df[pred_df["symbol"] == query]
+        if not rec.empty:
+            buy_pred = rec.iloc[0]["buy_pred"]
+            sell_pred = rec.iloc[0]["sell_pred"]
+            action = rec.iloc[0]["action"]
+            st.success(f"{query}: Model suggests **{action}** (with buy confidence {buy_pred*100:.1f}% and sell confidence {sell_pred*100:.1f}%)")
+        else:
+            st.info(f"No prediction available for {query}.")
+    else:
+        st.info("Please type a valid stock symbol (e.g. TCS, INFY).")
 
     
 st.subheader("📈 Price Trend")
@@ -368,23 +391,5 @@ else:
     )
 #------------------------------------------
 # # ------------------------------------------------------------------------------
-# # CHATBOT (basic rule-based)
-# # ------------------------------------------------------------------------------
-
-st.subheader("💬 Stock Chatbot")
-query = st.text_input("Ask about any stock:")
-if query:
-    query = query.upper()
-    if query in all_symbols:
-        rec = pred_df[pred_df["symbol"] == query]
-        if not rec.empty:
-            buy_pred = rec.iloc[0]["buy_pred"]
-            sell_pred = rec.iloc[0]["sell_pred"]
-            action = rec.iloc[0]["action"]
-            st.success(f"{query}: Model suggests **{action}** (with buy confidence {buy_pred*100:.1f}% and sell confidence {sell_pred*100:.1f}%)")
-        else:
-            st.info(f"No prediction available for {query}.")
-    else:
-        st.info("Please type a valid stock symbol (e.g. TCS, INFY).")
 
 
