@@ -248,10 +248,10 @@ import pandas as pd
 # import yfinance as yf
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
-import numpy as np
+# import numpy as np
 import plotly.express as px
 import os
-import random
+# import random
 
 # ------------------------------------------------------------------------------
 # APP CONFIG
@@ -371,7 +371,7 @@ if refresh:
     st.cache_data.clear()
     st.rerun()
 
-threshold = st.sidebar.slider("Alert Threshold (%)", 1, 10, 3)
+#threshold = st.sidebar.slider("Alert Threshold (%)", 1, 10, 3)
 
 # ------------------------------------------------------------------------------
 # PRICE CHARTS
@@ -399,30 +399,7 @@ with col2:
     st.markdown("### 🔴 Top Losers")
     st.dataframe(latest_df.sort_values("Change%").head(5)[["symbol", "Change%"]])
 
-# ------------------------------------------------------------------------------
-# SECTOR HEATMAP (mock sectors)
-# ------------------------------------------------------------------------------
 
-# sectors = ["IT", "Banking", "Energy", "Pharma", "Auto"]
-# sector_df = pd.DataFrame({
-#     "Sector": sectors,
-#     "Change%": [random.uniform(-2, 2) for _ in sectors]
-# })
-# st.subheader("🔥 Sector Heatmap")
-# heatmap = px.imshow([sector_df["Change%"]],
-#                     labels=dict(x="Sector", color="Change%"),
-#                     x=sector_df["Sector"], color_continuous_scale="RdYlGn")
-# st.plotly_chart(heatmap, use_container_width=True)
-
-# ------------------------------------------------------------------------------
-# NEWS SECTION
-# ------------------------------------------------------------------------------
-
-st.subheader("📰 Latest News & Sentiment")
-if not news_df.empty:
-    for _, row in news_df.iterrows():
-        color = "🟢" if row["sentiment"] == "positive" else "🔴" if row["sentiment"] == "negative" else "⚪"
-        st.markdown(f"{color} **{row['symbol']}** — {row['title']} ({row['sentiment']})")
 
 # ------------------------------------------------------------------------------
 # BUY / SELL PREDICTIONS
@@ -431,14 +408,107 @@ if not news_df.empty:
 st.subheader("💹 Model Recommendations")
 st.dataframe(pred_df[["symbol", "buy_pred", "sell_pred", "action"]])
 
-# ------------------------------------------------------------------------------
-# ALERT POP-UPS
-# ------------------------------------------------------------------------------
 
-for _, row in latest_df.iterrows():
-    if abs(row["Change%"]) >= threshold:
-        emoji = "📈" if row["Change%"] > 0 else "📉"
-        st.toast(f"{emoji} {row['symbol']} moved {row['Change%']:.2f}% today!", icon="⚡")
+#-----------------------------------------------------
+##------------------------------------------------------------------------
+##NEWS HEADLINES______
+############################################################################
+#----------
+import pandas as pd
+from sqlalchemy import create_engine
+import streamlit as st
+
+st.subheader("📰 Latest News & Sentiment")
+
+engine = create_engine(DB_URI)  # Make sure DB_URI is correct
+
+def fetch_news(symbols=None, top_n=5):
+    """Fetch news with internal stock_date for ordering (not displayed)"""
+    if symbols is None or len(symbols) == 0:
+        # general news
+        query = f"""
+        SELECT n.symbol, n.title, n.sentiment, MAX(s.timestamp) AS stock_date
+        FROM news_sentiment n
+        JOIN stocks s ON n.symbol = s.symbol
+        GROUP BY n.symbol, n.title, n.sentiment
+        ORDER BY stock_date DESC
+        LIMIT 3;
+        """
+    else:
+        symbols_list = ",".join([f"'{s.upper()}'" for s in symbols])
+        query = f"""
+        WITH ranked_news AS (
+            SELECT
+                s.symbol,
+                n.title,
+                n.sentiment,
+                s.timestamp AS stock_date,
+                ROW_NUMBER() OVER (PARTITION BY s.symbol ORDER BY s.timestamp DESC) AS rn
+            FROM stocks s
+            JOIN news_sentiment n
+              ON s.symbol = n.symbol
+            WHERE s.symbol IN ({symbols_list})
+        )
+        SELECT symbol, title, sentiment, stock_date
+        FROM ranked_news
+        WHERE rn <= {top_n}
+        ORDER BY stock_date DESC;
+        """
+    return pd.read_sql(query, engine)
+
+def map_sentiment(sent):
+    sent = str(sent).lower()
+    if sent in ["positive", "bullish"]:
+        return "Bullish"
+    elif sent in ["negative", "bearish"]:
+        return "Bearish"
+    else:
+        return "Neutral"
+
+def color_sentiment(val):
+    if val == "Bullish":
+        return "background-color: #00FF00"
+    elif val == "Bearish":
+        return "background-color: #FF6666"
+    else:
+        return "background-color: #FFFF99"
+
+# Fetch stock-specific news
+if selected_symbols:
+    if len(selected_symbols) == 1:
+        stock_news_df = fetch_news(selected_symbols, top_n=5)
+    else:
+        stock_news_df = fetch_news(selected_symbols, top_n=1)
+else:
+    stock_news_df = pd.DataFrame(columns=["symbol","title","sentiment","stock_date"])
+
+# Fetch general news (2–3)
+general_news_df = fetch_news(top_n=3)
+
+# Combine all news
+news_df = pd.concat([stock_news_df, general_news_df], ignore_index=True)
+if news_df.empty:
+    st.info("No news available.")
+else:
+    # Map sentiment and hide stock_date
+    news_df["Sentiment"] = news_df["sentiment"].apply(map_sentiment)
+    news_df_display = news_df[["symbol", "title", "Sentiment"]]
+
+    # Display color-coded table
+    st.dataframe(news_df_display.style.map(color_sentiment, subset=["Sentiment"]))
+
+
+#------------------------------------------
+
+
+# # ------------------------------------------------------------------------------
+# # ALERT POP-UPS
+# # ------------------------------------------------------------------------------
+
+# for _, row in latest_df.iterrows():
+#     if abs(row["Change%"]) >= threshold:
+#         emoji = "📈" if row["Change%"] > 0 else "📉"
+#         st.toast(f"{emoji} {row['symbol']} moved {row['Change%']:.2f}% today!", icon="⚡")
 
 # ------------------------------------------------------------------------------
 # CHATBOT (basic rule-based)
