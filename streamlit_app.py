@@ -288,7 +288,7 @@ styled_pred_df = (
 )
 
 # --- 4. Display in Streamlit ---
-st.subheader("💹 Buy/Sell Recommendations")
+st.subheader("💹 ML Trade Recommendations")
 st.dataframe(styled_pred_df, hide_index=True, use_container_width=True)
 #-----------------------------------------------------
 ##------------------------------------------------------------------------
