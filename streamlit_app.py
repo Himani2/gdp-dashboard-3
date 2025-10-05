@@ -98,8 +98,8 @@ with col_main:
     # # CHATBOT (basic rule-based)
 # # ------------------------------------------------------------------------------
 
-st.subheader("💬 Stock Chatbot")
-query = st.text_input("Ask about any stock:")
+st.subheader("Stock Buy/Sell Recommender")
+query = st.text_input("Ask about any stock eg TCS,BELL etc:")
 if query:
     query = query.upper()
     if query in all_symbols:
