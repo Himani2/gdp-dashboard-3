@@ -5,3 +5,5 @@ sqlalchemy
 matplotlib
 plotly
 yfinance
+openai
+streamlit-chat
