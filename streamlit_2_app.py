@@ -5,8 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
-import requests
-from streamlit_chat import message  # pip install streamlit-chat
+
+
 
 # --------------------------
 # PAGE CONFIG

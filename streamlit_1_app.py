@@ -245,15 +245,14 @@
 
 import streamlit as st
 import pandas as pd
-# import yfinance as yf
+
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 # import numpy as np
 import plotly.express as px
 import os
-import openai
-from streamlit_chat import message
-import requests 
+
+
 
 # import random
 
