@@ -3,5 +3,6 @@ streamlit
 pandas
 sqlalchemy
 matplotlib
+yfinance
 plotly
 pytz
