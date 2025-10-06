@@ -9,4 +9,4 @@ feedparser
 pytz
 fpdf
 matplotlib
-kaleido
+kaleidogit 
