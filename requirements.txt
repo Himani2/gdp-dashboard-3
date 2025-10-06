@@ -4,3 +4,7 @@ pandas
 sqlalchemy
 matplotlib
 plotly
+yfinance
+time
+BeautifulSoup
+pytz

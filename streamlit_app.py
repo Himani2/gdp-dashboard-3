@@ -6,7 +6,11 @@ import plotly.graph_objects as go
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 import requests
-
+import yfinance as yf
+from datetime import datetime
+import time
+from bs4 import BeautifulSoup
+import pytz
 
 # --------------------------
 # PAGE CONFIG
@@ -63,20 +67,78 @@ stocks_df = load_or_fetch("stocks")
 news_df = load_or_fetch("news_sentiment")
 pred_df = load_or_fetch("buy_sell_predictions")
 
+# # --------------------------
+# # MARKET DATE LOGIC
+# # --------------------------
+# today = datetime.now().date()
+# if today.weekday() >= 5:  # Sat/Sun
+#     last_friday = today - timedelta(days=today.weekday() - 4)
+#     st.warning(f"Market closed 🛑 Showing last Friday ({last_friday}) data")
+#     stocks_df["timestamp"] = pd.to_datetime(stocks_df["timestamp"])
+#     stocks_df = stocks_df[stocks_df["timestamp"] <= pd.Timestamp(last_friday)]
+
+
 # --------------------------
 # MARKET DATE LOGIC
 # --------------------------
-today = datetime.now().date()
-if today.weekday() >= 5:  # Sat/Sun
-    last_friday = today - timedelta(days=today.weekday() - 4)
-    st.warning(f"Market closed 🛑 Showing last Friday ({last_friday}) data")
-    stocks_df["timestamp"] = pd.to_datetime(stocks_df["timestamp"])
-    stocks_df = stocks_df[stocks_df["timestamp"] <= pd.Timestamp(last_friday)]
+# --------------------------
+# MARKET INFO LOGIC
+# --------------------------
+IST = pytz.timezone("Asia/Kolkata")
+now_ist = datetime.now(IST)
+today = now_ist.date()
+
+# Market open/close times (IST)
+market_open = "09:15 AM"
+market_close = "03:30 PM"
+
+# Determine last trading day for weekend
+if today.weekday() == 5:  # Saturday
+    last_trading_day = today - timedelta(days=1)
+    weekend_warning = f"Market closed 🛑 Showing last Friday ({last_trading_day}) data"
+elif today.weekday() == 6:  # Sunday
+    last_trading_day = today - timedelta(days=2)
+    weekend_warning = f"Market closed 🛑 Showing last Friday ({last_trading_day}) data"
+else:
+    last_trading_day = today
+    weekend_warning = None
+
+# Last updated timestamp in IST
+last_updated = now_ist.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+# --------------------------
+# Display in top-right corner
+# --------------------------
+warning_html = f"<br><span style='color:red;'>{weekend_warning}</span>" if weekend_warning else ""
+
+st.markdown(
+    f"""
+    <div style="
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background-color:#f0f2f6;
+        padding:10px 15px;
+        border-radius:8px;
+        box-shadow:0 2px 5px rgba(0,0,0,0.1);
+        font-size:14px;
+        color:#333;
+        z-index:9999;
+        text-align:right;
+    ">
+        <b>Market Open:</b> {market_open}  <br>
+        <b>Market Close:</b> {market_close} <br>
+        <b>Last Updated:</b> {last_updated}
+        {warning_html}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
 # --------------------------
 # SIDEBAR CONTROLS
 # --------------------------
-st.sidebar.header("⚙️ Controls")
+st.sidebar.header("⚙️ Select Indian Stocks you would like to filter")
 all_symbols = sorted(stocks_df["symbol"].unique())
 selected_symbols = st.sidebar.multiselect("Select Stocks", all_symbols, default=all_symbols[:3])
 refresh = st.sidebar.button("🔄 Refresh Data")
@@ -95,26 +157,112 @@ col_main, col_chat = st.columns([3, 1])  # 75% main, 25% chat
 with col_main:
     st.title("📊 Indian Stock Dashboard")
 
-    # # CHATBOT (basic rule-based)
-# # ------------------------------------------------------------------------------
+# # ---------------BUY/SELL RECOMMENDER---------------------------------------------------------------
 
-st.subheader("Stock Buy/Sell Recommender")
-query = st.text_input("Ask about any stock eg TCS,BELL etc:")
-if query:
-    query = query.upper()
-    if query in all_symbols:
-        rec = pred_df[pred_df["symbol"] == query]
-        if not rec.empty:
-            buy_pred = rec.iloc[0]["buy_pred"]
-            sell_pred = rec.iloc[0]["sell_pred"]
-            action = rec.iloc[0]["action"]
-            st.success(f"{query}: Model suggests **{action}** (with buy confidence {buy_pred*100:.1f}% and sell confidence {sell_pred*100:.1f}%)")
-        else:
-            st.info(f"No prediction available for {query}.")
+st.subheader("📊 Buy/Sell Recommender: ")
+# --- Dropdown for stock selection ---
+all_symbols = sorted(pred_df["symbol"].unique())
+selected_stock = st.selectbox("Select a Stock", all_symbols)
+
+# --- Fetch prediction for selected stock ---
+if selected_stock:
+    rec = pred_df[pred_df["symbol"] == selected_stock]
+    if not rec.empty:
+        buy_pred = rec.iloc[0]["buy_pred"]
+        sell_pred = rec.iloc[0]["sell_pred"]
+        action = rec.iloc[0]["action"]
+
+        # --- Display recommendation ---
+        st.success(
+            f"✅ **{selected_stock}** → Model suggests **{action}**\n\n"
+            f"**Buy Confidence:** {buy_pred*100:.1f}%  \n"
+            f"**Sell Confidence:** {sell_pred*100:.1f}%"
+        )
     else:
-        st.info("Please type a valid stock symbol (e.g. TCS, INFY).")
+        st.info(f"No prediction available for {selected_stock}.")
 
+  #-----------------------------------------------------------------
+# --- Define Indian Indices ---
+st.subheader("📊 Indian Market Indices ")
+
+
+# --- Define Indian Indices ---
+indices = {
+    "NIFTY 50": "^NSEI",
+    "SENSEX": "^BSESN",
+    "NIFTY BANK": "^NSEBANK",
+    "NIFTY 500": "^CRSLDX"
+}
+
+# --- Google Finance fallback ---
+def fetch_google_finance(symbol):
+    try:
+        url = f"https://www.google.com/finance/quote/{symbol}:NSE"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers)
+        soup = BeautifulSoup(r.text, "html.parser")
+        price_tag = soup.find("div", class_="YMlKec fxKbKc")
+        if price_tag:
+            price = float(price_tag.text.replace(",", ""))
+            return price
+    except:
+        return None
+    return None
+
+# --- Load index data ---
+@st.cache_data(ttl=300)  # cache for 5 min
+def load_index_data(symbol):
+    try:
+        df = yf.download(symbol, period="1y", interval="1d", progress=False)
+        if df.empty:
+            raise Exception("Yahoo returned empty data")
+        df.reset_index(inplace=True)
+        df["pct_change"] = df["Close"].pct_change() * 100
+        df["Date"] = df["Date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
+        latest_close = float(df["Close"].iloc[-1])
+        latest_pct = float(df["pct_change"].iloc[-1])
+    except:
+        latest_close = fetch_google_finance(symbol)
+        latest_pct = None
+    return latest_close, latest_pct
+
+# --- Display metrics cards ---
+cols = st.columns(len(indices))
+for i, (name, symbol) in enumerate(indices.items()):
+    latest_close, latest_pct = load_index_data(symbol)
+
+    if latest_close is not None:
+        if latest_pct is not None:
+            arrow = "🔼" if latest_pct > 0 else "🔽"
+            color = "green" if latest_pct > 0 else "red"
+            sign = "+" if latest_pct > 0 else "-"
+            pct_display = f"{arrow} {sign}{abs(latest_pct):.2f}%"
+        else:
+            pct_display = "—"
+            color = "black"
+
+        cols[i].markdown(
+            f"""
+            <div style="
+                background-color:#f9f9f9;
+                border-radius:10px;
+                padding:15px;
+                box-shadow:0 2px 4px rgba(0,0,0,0.1);
+                text-align:center;">
+                <h4 style="margin-bottom:5px;">{name}</h4>
+                <h2 style="margin:0;color:{color};">{pct_display}</h2>
+                <p style="margin:0;color:gray;">₹ {latest_close:.2f}</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        cols[i].warning(f"{name} data unavailable")
+
+#---------------------------------------------------------------
+  #----------------------PRICE TREND----------------------------
     
+
 st.subheader("📈 Price Trend")
 if not stocks_df.empty:
     fig = px.line(stocks_df[stocks_df["symbol"].isin(selected_symbols)],
