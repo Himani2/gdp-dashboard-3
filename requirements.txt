@@ -1,8 +1,12 @@
-psycopg2-binary
 streamlit
 pandas
-sqlalchemy
-matplotlib
-yfinance
 plotly
+sqlalchemy
+psycopg2-binary
+requests
+beautifulsoup4
+feedparser
 pytz
+fpdf
+matplotlib
+kaleido

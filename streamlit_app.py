@@ -6,12 +6,11 @@ import plotly.graph_objects as go
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 import requests
-import yfinance as yf
 from datetime import datetime
 import time
 from bs4 import BeautifulSoup
 import pytz
-
+import feedparser
 # --------------------------
 # PAGE CONFIG
 # --------------------------
@@ -182,83 +181,125 @@ if selected_stock:
         st.info(f"No prediction available for {selected_stock}.")
 
   #-----------------------------------------------------------------
+# --- File paths for cache ---
+INDEX_CSV = "indices_cache.csv"
+RSS_CSV = "economic_news_cache.csv"
+CACHE_TTL_MIN = 5  # minutes
+
 # --- Define Indian Indices ---
 st.subheader("📊 Indian Market Indices ")
 
-
-# --- Define Indian Indices ---
 indices = {
-    "NIFTY 50": "^NSEI",
-    "SENSEX": "^BSESN",
-    "NIFTY BANK": "^NSEBANK",
-    "NIFTY 500": "^CRSLDX"
+    "NIFTY 50": "NSEI",
+    "SENSEX": "BSESN",
+    "NIFTY BANK": "NSEBANK",
+    "NIFTY 500": "CRSLDX"
 }
 
-# --- Google Finance fallback ---
+# --- Google Finance fetch ---
 def fetch_google_finance(symbol):
     try:
         url = f"https://www.google.com/finance/quote/{symbol}:NSE"
         headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
         price_tag = soup.find("div", class_="YMlKec fxKbKc")
         if price_tag:
-            price = float(price_tag.text.replace(",", ""))
-            return price
+            return float(price_tag.text.replace(",", ""))
     except:
         return None
     return None
 
-# --- Load index data ---
-@st.cache_data(ttl=300)  # cache for 5 min
-def load_index_data(symbol):
-    try:
-        df = yf.download(symbol, period="1y", interval="1d", progress=False)
-        if df.empty:
-            raise Exception("Yahoo returned empty data")
-        df.reset_index(inplace=True)
-        df["pct_change"] = df["Close"].pct_change() * 100
-        df["Date"] = df["Date"].dt.tz_localize("UTC").dt.tz_convert("Asia/Kolkata")
-        latest_close = float(df["Close"].iloc[-1])
-        latest_pct = float(df["pct_change"].iloc[-1])
-    except:
-        latest_close = fetch_google_finance(symbol)
-        latest_pct = None
-    return latest_close, latest_pct
+# --- Economic RSS fetch ---
+RSS_URL = "https://news.google.com/rss/search?q=India+economy&hl=en-IN&gl=IN&ceid=IN:en"
 
-# --- Display metrics cards ---
-cols = st.columns(len(indices))
-for i, (name, symbol) in enumerate(indices.items()):
-    latest_close, latest_pct = load_index_data(symbol)
+def fetch_economic_rss():
+    feed = feedparser.parse(RSS_URL)
+    news_items = []
+    for entry in feed.entries[:5]:  # latest 5 news
+        news_items.append({
+            "title": entry.title,
+            "link": entry.link,
+            "published": entry.published
+        })
+    df = pd.DataFrame(news_items)
+    df["published"] = pd.to_datetime(df["published"])
+    return df
 
-    if latest_close is not None:
-        if latest_pct is not None:
-            arrow = "🔼" if latest_pct > 0 else "🔽"
-            color = "green" if latest_pct > 0 else "red"
-            sign = "+" if latest_pct > 0 else "-"
-            pct_display = f"{arrow} {sign}{abs(latest_pct):.2f}%"
-        else:
-            pct_display = "—"
-            color = "black"
+# --- Helper to check if cache is fresh ---
+def is_cache_fresh(file_path, ttl_minutes=CACHE_TTL_MIN):
+    if os.path.exists(file_path):
+        file_time = datetime.fromtimestamp(os.path.getmtime(file_path))
+        if datetime.now() - file_time < timedelta(minutes=ttl_minutes):
+            return True
+    return False
 
-        cols[i].markdown(
-            f"""
-            <div style="
-                background-color:#f9f9f9;
-                border-radius:10px;
-                padding:15px;
-                box-shadow:0 2px 4px rgba(0,0,0,0.1);
-                text-align:center;">
-                <h4 style="margin-bottom:5px;">{name}</h4>
-                <h2 style="margin:0;color:{color};">{pct_display}</h2>
-                <p style="margin:0;color:gray;">₹ {latest_close:.2f}</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
+# --- Load indices with CSV cache ---
+def load_index_data():
+    if is_cache_fresh(INDEX_CSV):
+        df = pd.read_csv(INDEX_CSV)
+        df["price"] = df["price"].astype(float)
     else:
-        cols[i].warning(f"{name} data unavailable")
+        data = []
+        for name, symbol in indices.items():
+            price = fetch_google_finance(symbol)
+            if price is None:
+                price = 0  # fallback
+            data.append({"name": name, "symbol": symbol, "price": price})
+        df = pd.DataFrame(data)
+        df.to_csv(INDEX_CSV, index=False)
+    return df
 
+# --- Load RSS news with CSV cache ---
+def load_rss_news():
+    if is_cache_fresh(RSS_CSV):
+        df = pd.read_csv(RSS_CSV)
+        df["published"] = pd.to_datetime(df["published"])
+    else:
+        df = fetch_economic_rss()
+        df.to_csv(RSS_CSV, index=False)
+    return df
+
+# --- Display indices as metrics cards ---
+index_df = load_index_data()
+cols = st.columns(len(indices))
+for i, row in index_df.iterrows():
+    cols[i].markdown(
+        f"""
+        <div style="
+            background-color:#f9f9f9;
+            border-radius:10px;
+            padding:15px;
+            box-shadow:0 2px 4px rgba(0,0,0,0.1);
+            text-align:center;">
+            <h4 style="margin-bottom:5px;">{row['name']}</h4>
+            <p style="margin:0;color:gray;">₹ {row['price']:.2f}</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# --- Display RSS news as cards ---
+st.subheader("📰 Latest Indian Economic News")
+rss_df = load_rss_news()
+cols_news = st.columns(2)
+for i, row in rss_df.iterrows():
+    col = cols_news[i % 2]
+    col.markdown(
+        f"""
+        <div style="
+            background-color:#f9f9f9;
+            border-radius:10px;
+            padding:10px;
+            margin-bottom:10px;
+            box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+            <h5 style="margin-bottom:5px;">{row['title']}</h5>
+            <p style="margin:0;color:gray;font-size:13px;">{row['published'].strftime('%d %b %Y %H:%M')}</p>
+            <a href="{row['link']}" target="_blank">Read More</a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 #---------------------------------------------------------------
   #----------------------PRICE TREND----------------------------
     
