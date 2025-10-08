@@ -13,22 +13,31 @@
 
 
 #-----------chatbot and dashboard--------
+# streamlit
+# pandas
+# pytz
+# plotly
+# sqlalchemy
+# yfinance
+# langchain_openai
+# langchain
+# langchain-community
+# chromadb
+# sentence-transformers
+# timestamp
+# streamlit
+# pandas
+# sqlalchemy
+# psycopg2
+# pytz
+# feedparser
+# altair
+
 streamlit
 pandas
-pytz
-plotly
 sqlalchemy
+psycopg2-binary
 yfinance
-langchain_openai
-langchain
-langchain-community
-chromadb
-sentence-transformers
-timestamp
-streamlit
-pandas
-sqlalchemy
-psycopg2
+altair
 pytz
 feedparser
-altair

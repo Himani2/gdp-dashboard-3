@@ -1,248 +1,129 @@
-import os
-import pandas as pd
 import streamlit as st
+import pandas as pd
 import yfinance as yf
+import os
 import pytz
 from datetime import datetime, timedelta
 from sqlalchemy import create_engine
-import plotly.express as px
+import altair as alt
 
-# =======================================
-# DATABASE CONFIGURATION
-# =======================================
-db_user = "postgres"
-db_password = "oX7IDNsZF1OrTOzS75Ek"
-db_host = "database-1.cs9ycq6ishdm.us-east-1.rds.amazonaws.com"
-db_port = "5432"  # default PostgreSQL port
-db_name = "capstone_project"
+# ==========================
+# DATABASE CONFIG
+# ==========================
+db_user = "<your_user>"
+db_password = "<your_password>"
+db_host = "<your_host>"
+db_port = "5432"
+db_name = "<your_db>"
 
 DB_URI = f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-engine = create_engine(DB_URI)
+DB_CONNECTED = False
+try:
+    engine = create_engine(DB_URI, connect_args={'connect_timeout':5})
+    with engine.connect():
+        DB_CONNECTED = True
+except:
+    DB_CONNECTED = False
 
-# =======================================
-# LOAD DATA FUNCTION
-# =======================================
-@st.cache_data(ttl=300)
+# ==========================
+# CACHE PATH
+# ==========================
+DATA_PATH = "./cache"
+os.makedirs(DATA_PATH, exist_ok=True)
+
+# ==========================
+# LOAD TABLES
+# ==========================
 def load_table(table_name):
-    try:
-        df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+    cache_file = f"{DATA_PATH}/{table_name}.csv"
+    df = None
+    if DB_CONNECTED:
+        try:
+            df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
+        except:
+            pass
+    if df is not None and not df.empty:
+        df.to_csv(cache_file, index=False)
         return df
-    except Exception as e:
-        st.warning(f"⚠️ Failed to load {table_name}: {e}")
-        return pd.DataFrame()
+    if os.path.exists(cache_file):
+        return pd.read_csv(cache_file)
+    return pd.DataFrame()
 
-# =======================================
-# FETCH DATA
-# =======================================
 stocks_df = load_table("stocks")
 pred_df = load_table("buy_sell_predictions")
 news_df = load_table("news_sentiment")
 
-# =======================================
-# TIME SETTINGS
-# =======================================
-IST = pytz.timezone("Asia/Kolkata")
-now_ist = datetime.now(IST)
-today = now_ist.date()
-
-# =======================================
-# SIDEBAR - STOCK SELECTION
-# =======================================
-st.sidebar.title("📊 Stock Dashboard Controls")
-
-all_symbols = sorted(stocks_df["symbol"].unique()) if not stocks_df.empty else []
-selected_symbols = st.sidebar.multiselect("Select Stocks for Chart", all_symbols, default=all_symbols[:3])
-
+# ==========================
+# SIDEBAR CONTROLS
+# ==========================
+st.sidebar.header("⚙️ Controls")
+symbols = sorted(stocks_df["symbol"].unique())
+selected_symbols = st.sidebar.multiselect("Select Stocks", symbols, default=symbols[:3])
+interval = st.sidebar.selectbox("Select Interval", ["5m","15m"])
 if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.experimental_rerun()
+    st.experimental_rerun = lambda: None  # workaround
+    st.experimental_rerun()  # simulate refresh
 
-# =======================================
-# MARKET INDICES (Yahoo Finance)
-# =======================================
-st.title("📈 Indian Market Overview")
+# ==========================
+# TIMEZONE & TODAY
+# ==========================
+ist = pytz.timezone("Asia/Kolkata")
+now_ist = datetime.now(ist)
+today_date = now_ist.date()
 
-indices_symbols = {
-    "NIFTY 50": "^NSEI",
-    "SENSEX": "^BSESN",
-    "NIFTY BANK": "^NSEBANK",
-    "NIFTY 500": "^CRSLDX"
-}
-
-indices_data = []
-for name, symbol in indices_symbols.items():
-    try:
-        ticker = yf.Ticker(symbol)
-        price = ticker.history(period="1d")["Close"].iloc[-1]
-        indices_data.append({"name": name, "price": price})
-    except:
-        pass
-
-cols = st.columns(len(indices_data))
-for i, row in enumerate(indices_data):
-    cols[i].metric(label=row["name"], value=f"₹ {row['price']:.2f}")
-
-# =======================================
-# ALERT NOTIFICATION (Bell Icon)
-# =======================================
-ALERTS_CSV = "alerts_history.csv"
-alerts = []
-
+# ==========================
+# ML MODEL RECOMMENDATIONS
+# ==========================
+st.subheader("💹 ML Model Recommendations")
 if not pred_df.empty:
-    for _, row in pred_df.iterrows():
-        alerts.append({
-            "symbol": row["symbol"],
-            "action": row["action"],
-            "confidence": f"{row['confidence']*100:.1f}%",
-            "timestamp": row["timestamp"]
-        })
+    df_pred = pred_df.head(10).copy()
+    df_pred = df_pred.drop(columns=["timestamp"], errors="ignore")
+    
+    # Create 'Action' column with icons
+    df_pred["Action"] = df_pred["action"].apply(
+        lambda a: "⬆️ Buy" if str(a).upper()=="BUY" else "⬇️ Sell" if str(a).upper()=="SELL" else "⏸️ No Trade"
+    )
+    
+    # Remove duplicate columns
+    df_pred = df_pred.loc[:, ~df_pred.columns.duplicated()]
+    
+    # Display columns (exclude original 'action')
+    display_cols = [col for col in df_pred.columns if col not in ["action"]]
 
-# Save alerts to CSV
-if alerts:
-    alert_df = pd.DataFrame(alerts)
-    if os.path.exists(ALERTS_CSV):
-        alert_df.to_csv(ALERTS_CSV, mode='a', header=False, index=False)
-    else:
-        alert_df.to_csv(ALERTS_CSV, index=False)
-
-with st.container():
-    st.markdown(f"### 🔔 Notifications ({len(alerts)})")
-    if st.button("View Notifications"):
-        st.dataframe(pd.DataFrame(alerts)[["symbol", "action", "confidence", "timestamp"]],
-                     use_container_width=True, hide_index=True)
-
-# =======================================
-# MARKET SENTIMENT BAR
-# =======================================
-if not pred_df.empty:
-    buy_conf = (pred_df[pred_df["action"] == "BUY"]["confidence"].mean()) * 100
-    sell_conf = (pred_df[pred_df["action"] == "SELL"]["confidence"].mean()) * 100
-    market_sentiment = "🟢 Bullish" if buy_conf > sell_conf else "🔴 Bearish"
-    st.metric("Market Sentiment", market_sentiment, f"Buy: {buy_conf:.1f}% | Sell: {sell_conf:.1f}%")
-
-# =======================================
-# TOP GAINERS / LOSERS / ACTIVE STOCKS
-# =======================================
-st.subheader("🏆 Market Movers")
-
-if not stocks_df.empty:
-    latest_df = stocks_df.groupby("symbol").last().reset_index()
-    latest_df["change_pct"] = ((latest_df["close"] - latest_df["open"]) / latest_df["open"]) * 100
-
-    gainers = latest_df.nlargest(5, "change_pct")[["symbol", "close", "change_pct"]]
-    losers = latest_df.nsmallest(5, "change_pct")[["symbol", "close", "change_pct"]]
-    active = latest_df.nlargest(5, "volume")[["symbol", "close", "volume"]]
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("**🟢 Top Gainers**")
-        st.dataframe(gainers, hide_index=True)
-    with c2:
-        st.markdown("**🔴 Top Losers**")
-        st.dataframe(losers, hide_index=True)
-    with c3:
-        st.markdown("**💼 Most Active**")
-        st.dataframe(active, hide_index=True)
-
-# =======================================
-# STOCK PRICE CHART
-# =======================================
-if not stocks_df.empty and selected_symbols:
-    st.subheader("📊 Stock Price Trends")
-    df_chart = stocks_df[stocks_df["symbol"].isin(selected_symbols)]
-    fig = px.line(df_chart, x="timestamp", y="close", color="symbol", title="Price Movement")
-    fig.update_layout(hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-
-# =======================================
-# BUY/SELL RECOMMENDATIONS
-# =======================================
-st.subheader("💹 ML Model Trade Recommendations")
-if not pred_df.empty:
-    selected_action = st.selectbox("Filter by Action", ["All", "BUY", "SELL"])
-    display_df = pred_df.copy()
-    display_df["Buy %"] = (display_df["buy_pred"]*100).round(1)
-    display_df["Sell %"] = (display_df["sell_pred"]*100).round(1)
-
-    if selected_action != "All":
-        display_df = display_df[display_df["action"] == selected_action]
-
-    st.dataframe(display_df[["symbol", "action", "Buy %", "Sell %", "timestamp"]],
-                 hide_index=True, use_container_width=True)
-
-# =======================================
-# EARNINGS CALENDAR (Yahoo Finance)
-# =======================================
-@st.cache_data(ttl=3600)
-def get_earnings_calendar():
-    symbols = ["TCS.NS", "INFY.NS", "RELIANCE.NS", "HDFCBANK.NS", "SBIN.NS", "ICICIBANK.NS", "WIPRO.NS"]
-    all_events = []
-    for sym in symbols:
-        try:
-            ticker = yf.Ticker(sym)
-            earnings = ticker.get_earnings_dates(limit=20)
-            if not earnings.empty:
-                earnings = earnings.reset_index().rename(columns={"Earnings Date": "date"})
-                earnings["symbol"] = sym
-                all_events.append(earnings)
-        except Exception as e:
-            print(f"Error fetching earnings for {sym}: {e}")
-    if all_events:
-        df = pd.concat(all_events)
-        df["date"] = pd.to_datetime(df["date"])
-        df = df[df["date"] <= "2026-06-30"]
-        df = df.sort_values("date")
-        return df
-    return pd.DataFrame()
-
-earnings_df = get_earnings_calendar()
-
-# --- Sidebar Earnings Calendar ---
-st.sidebar.title("📅 Quarterly Earnings Calendar")
-events_per_page = 5
-if "calendar_page" not in st.session_state:
-    st.session_state.calendar_page = 0
-
-total_pages = (len(earnings_df) - 1) // events_per_page + 1 if not earnings_df.empty else 1
-
-def prev_page():
-    if st.session_state.calendar_page > 0:
-        st.session_state.calendar_page -= 1
-
-def next_page():
-    if st.session_state.calendar_page < total_pages - 1:
-        st.session_state.calendar_page += 1
-
-col1, col2, col3 = st.sidebar.columns([1,6,1])
-with col1:
-    st.button("⬅️ Prev", on_click=prev_page)
-with col3:
-    st.button("Next ➡️", on_click=next_page)
-
-if not earnings_df.empty:
-    start_idx = st.session_state.calendar_page * events_per_page
-    end_idx = start_idx + events_per_page
-    page_events = earnings_df.iloc[start_idx:end_idx]
-
-    for _, row in page_events.iterrows():
-        date_str = row['date'].strftime("%b %d, %Y")
-        st.sidebar.metric(label=row["symbol"], value=date_str)
+    # Highlight colors
+    def highlight_action(val):
+        if "Buy" in val:
+            return "color: green; font-weight: bold"
+        elif "Sell" in val:
+            return "color: red; font-weight: bold"
+        return ""
+    
+    st.dataframe(df_pred[display_cols].style.applymap(highlight_action, subset=["Action"]),
+                 width="stretch")
 else:
-    st.sidebar.info("No earnings data found.")
+    st.info("No Buy/Sell predictions available.")
 
-# =======================================
-# NEWS & EVENTS IN CARD STYLE
-# =======================================
-st.subheader("🗞️ Latest Market News")
+# ==========================
+# NEWS SENTIMENT
+# ==========================
+st.subheader("📰 News Sentiment")
 if not news_df.empty:
-    for _, row in news_df.head(5).iterrows():
-        with st.container():
-            sentiment_icon = "🟢" if row["sentiment"].lower() in ["positive", "bullish"] else "🔴" if row["sentiment"].lower() in ["negative", "bearish"] else "⚪"
-            st.markdown(f"""
-            **{sentiment_icon} {row['title']}**  
-            *Source:* {row.get('source', 'N/A')}  
-            """)
+    chart_data = pd.DataFrame({
+        "Category": ["Bullish","Bearish","Neutral"],
+        "Count": [news_df[news_df["sentiment"]=="Bullish"].shape[0],
+                  news_df[news_df["sentiment"]=="Bearish"].shape[0],
+                  news_df[news_df["sentiment"]=="Neutral"].shape[0]]
+    })
+    chart = alt.Chart(chart_data).mark_bar().encode(
+        x="Count",
+        y=alt.Y("Category", sort="-x"),
+        color="Category"
+    )
+    st.altair_chart(chart, width="stretch")
 else:
-    st.info("No news available currently.")
+    st.write("No sentiment data available.")
 
-st.success("✅ Dashboard Loaded Successfully")
+# ==========================
+# LAST UPDATED TIMESTAMP
+# ==========================
+st.markdown(f"<p style='text-align:right; font-size:12px;'>Last Updated: {now_ist.strftime('%Y-%m-%d %H:%M:%S')}</p>", unsafe_allow_html=True)
