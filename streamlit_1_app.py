@@ -275,7 +275,7 @@ os.makedirs(DATA_PATH, exist_ok=True)
 CACHE_TTL = "4h"
 
 st.title("📊 Indian Stock Intelligence Dashboard")
-st.caption("Live + Cached data | Auto-fallback | Weekend-aware")
+#st.caption("Live + Cached data | Auto-fallback | Weekend-aware")
 
 # ------------------------------------------------------------------------------
 # UTILITY: unified loader with DB → fallback → CSV cache

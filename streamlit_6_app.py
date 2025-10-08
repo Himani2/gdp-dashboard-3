@@ -1,242 +1,353 @@
 import os
-import pandas as pd
 import streamlit as st
+import pandas as pd
 import yfinance as yf
-import pytz
-from datetime import datetime, timedelta
 from sqlalchemy import create_engine
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import feedparser
+import datetime
+from datetime import timedelta
+from typing import List, Dict, Any, Optional
 
-# ================================
-# DATABASE CONFIGURATION
-# ================================
+# =======================================
+# CONFIGURATION AND SETUP
+# =======================================
+
+# --- Database Placeholders ---
+db_user = "postgres"
+# Database credentials are now hardcoded to the default fallback values 
+# as requested to simplify the setup.
 db_user = "postgres"
 db_password = "oX7IDNsZF1OrTOzS75Ek"
 db_host = "database-1.cs9ycq6ishdm.us-east-1.rds.amazonaws.com"
 db_port = "5432"  # default PostgreSQL port
 db_name = "capstone_project"
 
-
 DB_URI = f'postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-engine = create_engine(DB_URI)
 
-# ================================
-# LOAD DATA FUNCTION
-# ================================
-@st.cache_data(ttl=300)
-def load_table(table_name):
+DB_CONNECTED = False
+try:
+    # Use a timeout context manager or connection test here in a real application
+    engine = create_engine(DB_URI, connect_args={'connect_timeout': 5})
+    with engine.connect():
+        DB_CONNECTED = True
+except Exception as e:
+    # st.error(f"Database connection failed: {e}") # Uncomment for debugging
+    DB_CONNECTED = False
+    pass 
+
+
+# --- Market Holidays for NSE/BSE (2025 Equity Segment) ---
+# Used to check if today is a non-trading day.
+# Source: NSE/BSE holiday calendar 2025.
+NSE_HOLIDAYS_2025 = [
+    datetime.date(2025, 2, 26),  # Mahashivratri (Wednesday)
+    datetime.date(2025, 3, 14),  # Holi (Friday)
+    datetime.date(2025, 3, 31),  # Eid-Ul-Fitr (Monday)
+    datetime.date(2025, 4, 10),  # Shri Mahavir Jayanti (Thursday)
+    datetime.date(2025, 4, 14),  # Dr. Baba Saheb Ambedkar Jayanti (Monday)
+    datetime.date(2025, 4, 18),  # Good Friday (Friday)
+    datetime.date(2025, 5, 1),   # Maharashtra Day (Thursday)
+    datetime.date(2025, 8, 15),  # Independence Day (Friday)
+    datetime.date(2025, 8, 27),  # Ganesh Chaturthi (Wednesday)
+    datetime.date(2025, 10, 2),  # Mahatma Gandhi Jayanti/Dussehra (Thursday)
+    datetime.date(2025, 10, 21), # Diwali Laxmi Pujan (Muhurat Trading only) (Tuesday)
+    datetime.date(2025, 10, 22), # Diwali-Balipratipada (Wednesday)
+    datetime.date(2025, 11, 5),  # Prakash Gurpurb Sri Guru Nanak Dev (Wednesday)
+    datetime.date(2025, 12, 25), # Christmas (Thursday)
+]
+
+# =======================================
+# UTILITY FUNCTIONS
+# =======================================
+
+@st.cache_data(ttl=3600)
+def is_trading_day(check_date: datetime.date) -> bool:
+    """Checks if a given date is a trading day (Monday-Friday, non-holiday)."""
+    # Check for weekends (Monday=0, Sunday=6)
+    if check_date.weekday() >= 5: # Saturday or Sunday
+        return False
+    # Check for declared holidays
+    if check_date in NSE_HOLIDAYS_2025:
+        return False
+    return True
+
+@st.cache_data(ttl=3600)
+def get_latest_trading_date(start_date: datetime.date) -> datetime.date:
+    """Finds the most recent previous trading day."""
+    current_date = start_date
+    while not is_trading_day(current_date):
+        current_date -= timedelta(days=1)
+    return current_date
+
+@st.cache_data(ttl=3600)
+def load_yfinance_fallback(ticker: str, periods: str) -> Optional[pd.DataFrame]:
+    """
+    Loads data from yfinance. If today is a non-trading day, it loads the data 
+    from the previous trading day to ensure fresh market data is displayed.
+    """
     try:
-        df = pd.read_sql(f"SELECT * FROM {table_name}", engine)
-        return df
+        # Determine the correct date range to fetch
+        today = datetime.date.today()
+        latest_date = get_latest_trading_date(today)
+        
+        # Adjust the 'end' date for yfinance to ensure we capture the latest trading day's data
+        # We use tomorrow's date for 'end' to include the full 'latest_date' data.
+        end_date = latest_date + timedelta(days=1)
+        start_date = latest_date - timedelta(days=365) # Last 1 year for history
+        
+        data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+
+        if data.empty:
+            st.warning(f"No data fetched for {ticker} on {latest_date}. Check ticker or holiday status.")
+            return None
+
+        # Filter to ensure we only show data up to the latest trading day
+        data = data[data.index.date <= latest_date]
+        
+        return data
+
     except Exception as e:
-        st.warning(f"⚠️ Failed to load {table_name}: {e}")
-        return pd.DataFrame()
+        st.error(f"Error fetching data from Yahoo Finance for {ticker}: {e}")
+        return None
 
-# ================================
-# FETCH DATA
-# ================================
-stocks_df = load_table("stocks")
-pred_df = load_table("buy_sell_recommendation")
-news_df = load_table("news_sentiment")
-earnings_df = pd.read_csv("earnings_calendar.csv") if os.path.exists("earnings_calendar.csv") else pd.DataFrame()
+# =======================================
+# DATA LOADING FUNCTIONS
+# =======================================
 
-# ================================
-# TIME SETTINGS
-# ================================
-IST = pytz.timezone("Asia/Kolkata")
-now_ist = datetime.now(IST)
-today = now_ist.date()
-
-# ================================
-# SIDEBAR - STOCK SELECTION & WATCHLIST
-# ================================
-st.sidebar.title("📊 Dashboard Controls")
-all_symbols = sorted(stocks_df["symbol"].unique()) if not stocks_df.empty else []
-selected_symbols = st.sidebar.multiselect("Select Stocks for Candlestick Chart", all_symbols, default=all_symbols[:3])
-watchlist_symbols = st.sidebar.multiselect("Select Watchlist Stocks", all_symbols, default=all_symbols[:3])
-
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.experimental_rerun()
-
-# ================================
-# ALERTS (Top Confident Trades)
-# ================================
-ALERTS_CSV = "alerts_history.csv"
-alerts = []
-
-if not pred_df.empty:
-    for _, row in pred_df.iterrows():
-        alerts.append({
-            "symbol": row["symbol"],
-            "action": row["action"],
-            "confidence": f"{row['buy_pred']*100:.1f}%" if row["action"]=="BUY" else f"{row['sell_pred']*100:.1f}%",
-            "timestamp": row["timestamp"]
-        })
-
-# Save alerts to CSV
-if alerts:
-    alert_df = pd.DataFrame(alerts)
-    if os.path.exists(ALERTS_CSV):
-        alert_df.to_csv(ALERTS_CSV, mode='a', header=False, index=False)
+@st.cache_data(ttl=3600)
+def load_market_data(ticker: str) -> Optional[pd.DataFrame]:
+    """Loads market data, preferring DB, falling back to yfinance."""
+    if DB_CONNECTED:
+        try:
+            # Assumes 'stocks' table has 'date' and 'close' columns
+            df = pd.read_sql(f"SELECT date, close FROM stocks WHERE ticker = '{ticker}' ORDER BY date DESC LIMIT 365", engine)
+            df['date'] = pd.to_datetime(df['date']).dt.date
+            df = df.set_index('date').sort_index()
+            return df
+        except Exception as e:
+            st.warning(f"DB Load failed for {ticker}. Falling back to yfinance. Error: {e}")
+            return load_yfinance_fallback(ticker, "1y")
     else:
-        alert_df.to_csv(ALERTS_CSV, index=False)
+        return load_yfinance_fallback(ticker, "1y")
 
-st.subheader(f"🔔 Alerts ({len(alerts)})")
-if alerts:
-    st.dataframe(pd.DataFrame(alerts)[["symbol","action","confidence","timestamp"]], hide_index=True, use_container_width=True)
-else:
-    st.info("No active alerts.")
 
-# ================================
-# OPEN / CLOSE / TOTAL TRADES METRICS
-# ================================
-st.subheader("📊 Open / Close Trade Metrics (ML Predictions)")
-if not pred_df.empty:
-    open_conf = (pred_df[pred_df["action"]=="BUY"]["buy_pred"].sum()*100).round(1)
-    close_conf = (pred_df[pred_df["action"]=="SELL"]["sell_pred"].sum()*100).round(1)
-    total_trades = pred_df.shape[0]
-    m1, m2, m3 = st.columns(3)
-    m1.metric("🟢 Open Trade Confidence", f"{open_conf:.1f}%")
-    m2.metric("🔴 Close Trade Confidence", f"{close_conf:.1f}%")
-    m3.metric("💼 Total Trades", f"{total_trades}")
+@st.cache_data(ttl=3600)
+def load_recommendations() -> pd.DataFrame:
+    """Loads latest predictions, preferring DB, falling back to dummy data."""
+    if DB_CONNECTED:
+        try:
+            # Assumes 'buy_sell_recommendation' table is structured appropriately
+            df = pd.read_sql("SELECT * FROM buy_sell_recommendation ORDER BY date DESC LIMIT 5", engine)
+            df['date'] = pd.to_datetime(df['date'])
+            return df
+        except Exception:
+            st.warning("DB Load failed for recommendations. Returning empty data.")
+    
+    # Fallback: Return an empty DataFrame if DB connection fails (Removed Dummy Data)
+    return pd.DataFrame(columns=['date', 'ticker', 'recommendation', 'confidence'])
 
-# ================================
-# MARKET INDICES METRIC CARDS
-# ================================
-st.subheader("📈 Market Indices")
-indices_symbols = {
-    "NIFTY 50": "^NSEI",
-    "SENSEX": "^BSESN",
-    "NIFTY BANK": "^NSEBANK",
-    "NIFTY 500": "^CRSLDX"
-}
-indices_data = []
-for name,symbol in indices_symbols.items():
+
+@st.cache_data(ttl=3600)
+def load_news_fallback() -> pd.DataFrame:
+    """Loads latest economic news from an RSS feed."""
     try:
-        ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="2d")
-        last_close = hist["Close"].iloc[-1]
-        prev_close = hist["Close"].iloc[-2]
-        pct_change = ((last_close - prev_close)/prev_close)*100
-        arrow = "⬆️" if pct_change>=0 else "⬇️"
-        indices_data.append({"name":name,"price":last_close,"change":f"{arrow} {pct_change:.2f}%"})
-    except:
-        indices_data.append({"name":name,"price":0,"change":"N/A"})
+        feed_url = "https://economictimes.indiatimes.com/rssfeedcode/2552695.cms" # Indian Markets/Economy RSS
+        feed = feedparser.parse(feed_url)
+        
+        news_data = []
+        for entry in feed.entries[:10]:
+            news_data.append({
+                'title': entry.title,
+                'summary': entry.summary,
+                'link': entry.link,
+                'published': pd.to_datetime(entry.published).tz_convert(None) if hasattr(entry, 'published') else datetime.datetime.now()
+            })
+        return pd.DataFrame(news_data)
+    except Exception:
+        # Emergency fallback: return an empty DataFrame if RSS fails (Removed Dummy Data)
+        st.warning("RSS Feed load failed. Returning empty news data.")
+        return pd.DataFrame(columns=['title', 'summary', 'link', 'published'])
 
-cols = st.columns(len(indices_data))
-for i,row in enumerate(indices_data):
-    cols[i].metric(label=row["name"], value=f"₹ {row['price']:.2f}", delta=row["change"])
+@st.cache_data(ttl=3600)
+def load_news_data() -> pd.DataFrame:
+    """Loads news data, preferring DB, falling back to RSS."""
+    if DB_CONNECTED:
+        try:
+            # Assumes 'news_sentiment' table is structured appropriately
+            df = pd.read_sql("SELECT title, sentiment, score, published_at FROM news_sentiment ORDER BY published_at DESC LIMIT 10", engine)
+            df.rename(columns={'published_at': 'published'}, inplace=True)
+            return df
+        except Exception:
+            st.warning("DB Load failed for news. Using RSS fallback.")
+    
+    # If DB fails or not connected, use the RSS fallback
+    return load_news_fallback()
 
-# ================================
-# TOP GAINERS / LOSERS / MOST / LEAST ACTIVE
-# ================================
-st.subheader("🏆 Market Movers")
-if not stocks_df.empty:
-    latest = stocks_df.groupby("symbol").last().reset_index()
-    latest["change_pct"] = ((latest["close"] - latest["open"])/latest["open"])*100
-    top_gainers = latest.nlargest(5,"change_pct")[["symbol","close","change_pct"]]
-    top_losers = latest.nsmallest(5,"change_pct")[["symbol","close","change_pct"]]
-    most_active = latest.nlargest(5,"volume")[["symbol","close","volume"]]
-    least_active = latest.nsmallest(5,"volume")[["symbol","close","volume"]]
+# =======================================
+# VISUALIZATION AND DISPLAY FUNCTIONS
+# =======================================
 
-    c1,c2,c3,c4 = st.columns(4)
-    def format_arrow(val):
-        return f"🟢 {val:.2f}%" if val>0 else f"🔴 {val:.2f}%"
-    with c1:
-        st.markdown("**🟢 Top Gainers**")
-        top_gainers["change_pct"] = top_gainers["change_pct"].apply(format_arrow)
-        st.dataframe(top_gainers, hide_index=True)
-    with c2:
-        st.markdown("**🔴 Top Losers**")
-        top_losers["change_pct"] = top_losers["change_pct"].apply(format_arrow)
-        st.dataframe(top_losers, hide_index=True)
-    with c3:
-        st.markdown("**💼 Most Active**")
-        st.dataframe(most_active, hide_index=True)
-    with c4:
-        st.markdown("**📉 Least Active**")
-        st.dataframe(least_active, hide_index=True)
+def display_dashboard(market_data: pd.DataFrame, recommendations: pd.DataFrame, news_data: pd.DataFrame, trading_date: datetime.date):
+    """Renders the main Streamlit dashboard layout."""
+    
+    st.title("🇮🇳 GenAI Indian Market Dashboard")
+    st.caption(f"Market Data as of: **{trading_date.strftime('%Y-%m-%d')}**")
+    
+    # --- Holiday Card ---
+    col1, col2, col3 = st.columns(3)
+    
+    upcoming_holidays = sorted([d for d in NSE_HOLIDAYS_2025 if d > datetime.date.today()])
+    
+    if upcoming_holidays:
+        next_holiday_date = upcoming_holidays[0]
+        next_holiday_name = get_holiday_name(next_holiday_date)
+        days_away = (next_holiday_date - datetime.date.today()).days
+        
+        col1.metric(
+            label="Next Market Holiday", 
+            value=next_holiday_name, 
+            delta=f"{days_away} days away ({next_holiday_date.strftime('%b %d')})"
+        )
+    else:
+        col1.metric(label="Next Market Holiday", value="Calendar Clear", delta="No 2025 holidays remaining")
 
-# ================================
-# WATCHLIST
-# ================================
-if watchlist_symbols:
-    st.subheader("⭐ Watchlist Metrics")
-    watch_df = stocks_df[stocks_df["symbol"].isin(watchlist_symbols)].groupby("symbol").last().reset_index()
-    cols = st.columns(len(watch_df))
-    for i,row in watch_df.iterrows():
-        delta = row["close"]-row["open"]
-        arrow = "⬆️" if delta>0 else "⬇️"
-        cols[i].metric(label=row["symbol"], value=f"₹ {row['close']:.2f}", delta=f"{arrow} {delta:.2f}")
+    # --- Market Metrics ---
+    # FIX: Use .item() to extract the scalar value from the Pandas Series element
+    latest_close = market_data['Close'].iloc[-1].item()
+    previous_close = market_data['Close'].iloc[-2].item()
+    change = latest_close - previous_close
+    percent_change = (change / previous_close) * 100
 
-# ================================
-# CANDLESTICK CHART
-# ================================
-if selected_symbols:
-    st.subheader("📊 Candlestick Chart")
-    for sym in selected_symbols:
-        df = stocks_df[stocks_df["symbol"]==sym].sort_values("timestamp")
-        fig = go.Figure(data=[go.Candlestick(
-            x=df["timestamp"],
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            increasing_line_color="green",
-            decreasing_line_color="red"
-        )])
-        fig.update_layout(title=f"{sym} Candlestick", xaxis_title="Time", yaxis_title="Price", plot_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+    col2.metric(
+        label="Nifty 50 Close", 
+        value=f"{latest_close:,.2f}", 
+        delta=f"{change:+.2f} ({percent_change:+.2f}%)"
+    )
 
-# ================================
-# BUY / SELL RECOMMENDATIONS
-# ================================
-st.subheader("💹 ML Trade Recommendations")
-if not pred_df.empty:
-    pred_df["Buy %"] = (pred_df["buy_pred"]*100).round(1)
-    pred_df["Sell %"] = (pred_df["sell_pred"]*100).round(1)
-    st.dataframe(pred_df[["symbol","action","Buy %","Sell %","timestamp"]], hide_index=True, use_container_width=True)
+    # Ensure recommendations is not empty before attempting to filter
+    buy_count = 0
+    if not recommendations.empty:
+        buy_count = recommendations[recommendations['recommendation'] == 'BUY'].shape[0]
 
-# ================================
-# NEWS (Sidebar Scrollable)
-# ================================
-st.sidebar.title("📰 Latest News")
-if not news_df.empty:
-    if "news_idx" not in st.session_state:
-        st.session_state.news_idx = 0
-    def prev_news(): st.session_state.news_idx = max(0, st.session_state.news_idx-1)
-    def next_news(): st.session_state.news_idx = min(len(news_df)-1, st.session_state.news_idx+1)
-    ncol1,ncol2,ncol3 = st.sidebar.columns([1,6,1])
-    with ncol1: st.button("⬅️", on_click=prev_news)
-    with ncol3: st.button("➡️", on_click=next_news)
-    news_row = news_df.iloc[st.session_state.news_idx]
-    sentiment_icon = "🟢" if news_row["sentiment"].lower() in ["positive","bullish"] else "🔴" if news_row["sentiment"].lower() in ["negative","bearish"] else "⚪"
-    st.sidebar.markdown(f"**{sentiment_icon} {news_row['title']}**  \n*Source:* {news_row.get('source','N/A')}")
+    col3.metric(
+        label="Recommendation Count (Buy)", 
+        value=buy_count,
+        delta="Based on latest model run"
+    )
 
-# ================================
-# EARNINGS CALENDAR (Sidebar)
-# ================================
-st.sidebar.title("📅 Earnings / Events Calendar")
-events_per_page = 1
-if "calendar_page" not in st.session_state:
-    st.session_state.calendar_page = 0
+    st.markdown("---")
 
-total_pages = (len(earnings_df)-1)//events_per_page+1 if not earnings_df.empty else 1
-def prev_event(): st.session_state.calendar_page = max(0, st.session_state.calendar_page-1)
-def next_event(): st.session_state.calendar_page = min(total_pages-1, st.session_state.calendar_page+1)
+    # --- Chart and Recommendations ---
+    st.header("Nifty 50 Trend")
+    st.line_chart(market_data['Close'])
 
-c1,c2,c3 = st.sidebar.columns([1,6,1])
-with c1: st.button("⬅️", on_click=prev_event)
-with c3: st.button("➡️", on_click=next_event)
+    st.header("Latest AI Recommendations")
+    # This correctly displays an empty table if recommendations is an empty DataFrame
+    st.dataframe(recommendations) 
 
-if not earnings_df.empty:
-    start_idx = st.session_state.calendar_page*events_per_page
-    page_events = earnings_df.iloc[start_idx:start_idx+events_per_page]
-    for _,row in page_events.iterrows():
-        st.sidebar.markdown(f"**{row['symbol']}**  \n{row['date']}  \n*Event:* {row.get('event','N/A')}")
-else:
-    st.sidebar.info("No earnings/events found.")
+    # --- News and Sentiment ---
+    st.header("Market News & Sentiment")
+    
+    if 'sentiment' in news_data.columns and not news_data.empty:
+        # Display aggregated sentiment if DB data is used and available
+        st.subheader("Aggregated Sentiment")
+        sentiment_counts = news_data['sentiment'].value_counts()
+        st.bar_chart(sentiment_counts)
+    elif 'sentiment' in news_data.columns and news_data.empty:
+        st.info("No recent news or sentiment data available.")
 
-st.success("✅ Dashboard Loaded Successfully")
+    st.subheader("Latest News Articles")
+    
+    # Only iterate if news_data is not empty
+    if not news_data.empty:
+        for index, row in news_data.head(5).iterrows():
+            title = row['title']
+            summary = row.get('summary', 'No summary available.')
+            link = row.get('link', '#')
+            published = row.get('published', 'N/A')
+            sentiment = row.get('sentiment', 'N/A')
+            
+            st.markdown(f"""
+                <div style="padding: 10px; margin-bottom: 10px; border-radius: 8px; background-color: #0d1117; border: 1px solid #1f2937;">
+                    <p style="font-size: 1.1em; font-weight: bold; margin: 0;">
+                        <a href="{link}" target="_blank" style="color: #6366f1; text-decoration: none;">{title}</a>
+                    </p>
+                    <p style="font-size: 0.9em; margin-top: 5px; margin-bottom: 5px; color: #9ca3af;">
+                        {summary[:100]}...
+                    </p>
+                    <p style="font-size: 0.75em; margin: 0; color: #4b5563;">
+                        Published: {published} | Sentiment: <b>{sentiment}</b>
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("No news articles to display.")
+        
+    st.markdown("---")
+    
+    # --- Holiday List Card ---
+    st.header("Indian Stock Market Holidays (2025)")
+    holiday_details = []
+    for date in sorted(NSE_HOLIDAYS_2025):
+        name = get_holiday_name(date)
+        # Create HTML list item for each holiday
+        holiday_details.append(f'<li style="margin-bottom: 5px; color: #d1d5db;">- **{date.strftime("%b %d, %Y")}**: {name}</li>')
+    
+    # FIX: Join the list items outside the f-string to avoid the backslash error
+    list_html_content = "\n".join(holiday_details)
+    
+    st.markdown(
+        f"""
+        <div style="padding: 15px; border-radius: 12px; background-color: #1a202c; border: 2px solid #6366f1;">
+            <p style="font-weight: bold; color: #fff;">Equity and Derivative Markets will be closed on these days:</p>
+            <ul style="list-style-type: none; padding-left: 0;">
+                {list_html_content}
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+    
+def get_holiday_name(date: datetime.date) -> str:
+    """Helper function to map date to holiday name."""
+    mapping = {
+        datetime.date(2025, 2, 26): "Mahashivratri",
+        datetime.date(2025, 3, 14): "Holi",
+        datetime.date(2025, 3, 31): "Eid-Ul-Fitr",
+        datetime.date(2025, 4, 10): "Mahavir Jayanti",
+        datetime.date(2025, 4, 14): "Ambedkar Jayanti",
+        datetime.date(2025, 4, 18): "Good Friday",
+        datetime.date(2025, 5, 1): "Maharashtra Day",
+        datetime.date(2025, 8, 15): "Independence Day",
+        datetime.date(2025, 8, 27): "Ganesh Chaturthi",
+        datetime.date(2025, 10, 2): "Gandhi Jayanti/Dussehra",
+        datetime.date(2025, 10, 21): "Diwali Laxmi Pujan",
+        datetime.date(2025, 10, 22): "Diwali-Balipratipada",
+        datetime.date(2025, 11, 5): "Guru Nanak Dev Jayanti",
+        datetime.date(2025, 12, 25): "Christmas",
+    }
+    return mapping.get(date, "Holiday")
+
+
+# =======================================
+# MAIN EXECUTION
+# =======================================
+def main():
+    """Main function to run the dashboard."""
+    # Check if the current time is a non-trading period (e.g., late at night, weekend, or holiday)
+    # Note: Stock markets usually close at 3:30 PM IST. We check for a new trading day.
+    today = datetime.date.today()
+    latest_trading_date = get_latest_trading_date(today)
+    
+    # Load all required data based on the latest trading day
+    nifty_data = load_market_data("^NSEI") 
+    recommendations = load_recommendations()
+    news_data = load_news_data()
+
+    if nifty_data is not None and not nifty_data.empty:
+        display_dashboard(nifty_data, recommendations, news_data, latest_trading_date)
+    else:
+        st.error("Could not load Nifty 50 data.")
+
+if __name__ == "__main__":
+    main()

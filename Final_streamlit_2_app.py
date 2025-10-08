@@ -91,6 +91,34 @@ col_main, col_chat = st.columns([3, 1])  # 75% main, 25% chat
 with col_main:
     st.title("📊 Indian Stock Dashboard")
 
+    # ----------------------------------------------
+# BUY/SELL PREDICTION SECTION WITH DROPDOWN
+# ----------------------------------------------
+
+st.subheader("💬 BUY/SELL PREDICTION")
+
+# Get all unique symbols from stocks DataFrame
+all_symbols = stocks_df["symbol"].unique().tolist()
+
+# Create a dropdown to select stock
+selected_stock = st.selectbox("Select a stock:", options=all_symbols)
+
+# Once a stock is selected, fetch its prediction
+if selected_stock:
+    rec = pred_df[pred_df["symbol"] == selected_stock]
+
+    if not rec.empty:
+        buy_pred = rec.iloc[0]["buy_pred"]
+        sell_pred = rec.iloc[0]["sell_pred"]
+        action = rec.iloc[0]["action"]
+
+        st.success(
+            f"**{selected_stock}** → Model suggests **{action}** "
+            f"(Buy confidence: {buy_pred*100:.1f}%, Sell confidence: {sell_pred*100:.1f}%)"
+        )
+    else:
+        st.info(f"No prediction available for {selected_stock}.")
+
     
 st.subheader("📈 Price Trend")
 if not stocks_df.empty:
@@ -367,24 +395,25 @@ else:
         hide_index=True
     )
 #------------------------------------------
-# # ------------------------------------------------------------------------------
-# # CHATBOT (basic rule-based)
-# # ------------------------------------------------------------------------------
+# # # ------------------------------------------------------------------------------
+# # # BUY/SELL PREDICTION
+# # # ------------------------------------------------------------------------------
 
-st.subheader("💬 Stock Chatbot")
-query = st.text_input("Ask about any stock:")
-if query:
-    query = query.upper()
-    if query in all_symbols:
-        rec = pred_df[pred_df["symbol"] == query]
-        if not rec.empty:
-            buy_pred = rec.iloc[0]["buy_pred"]
-            sell_pred = rec.iloc[0]["sell_pred"]
-            action = rec.iloc[0]["action"]
-            st.success(f"{query}: Model suggests **{action}** (with buy confidence {buy_pred*100:.1f}% and sell confidence {sell_pred*100:.1f}%)")
-        else:
-            st.info(f"No prediction available for {query}.")
-    else:
-        st.info("Please type a valid stock symbol (e.g. TCS, INFY).")
+# st.subheader("💬 BUY/SELL PREDICTION")
+# query = st.text_input("Ask about any stock:")
+# if query:
+#     query = query.upper()
+#     if query in all_symbols:
+#         rec = pred_df[pred_df["symbol"] == query]
+#         if not rec.empty:
+#             buy_pred = rec.iloc[0]["buy_pred"]
+#             sell_pred = rec.iloc[0]["sell_pred"]
+#             action = rec.iloc[0]["action"]
+#             st.success(f"{query}: Model suggests **{action}** (with buy confidence {buy_pred*100:.1f}% and sell confidence {sell_pred*100:.1f}%)")
+#         else:
+#             st.info(f"No prediction available for {query}.")
+#     else:
+#         st.info("Please type a valid stock symbol (e.g. TCS, INFY).")
+
 
 

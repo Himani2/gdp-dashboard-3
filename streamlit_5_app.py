@@ -35,7 +35,7 @@ def load_table(table_name):
 # FETCH DATA
 # =======================================
 stocks_df = load_table("stocks")
-pred_df = load_table("buy_sell_recommendation")
+pred_df = load_table("buy_sell_predictions")
 news_df = load_table("news_sentiment")
 
 # =======================================
