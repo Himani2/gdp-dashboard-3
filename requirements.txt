@@ -24,3 +24,11 @@ langchain
 langchain-community
 chromadb
 sentence-transformers
+timestamp
+streamlit
+pandas
+sqlalchemy
+psycopg2
+pytz
+feedparser
+altair
