@@ -5,7 +5,7 @@ import pytz
 import numpy as np
 from datetime import datetime, time, timedelta
 from sqlalchemy import create_engine
-import altair as alt
+# altair import removed for lightweight dashboard
 
 # =====================================
 # CONFIGURATION
@@ -71,58 +71,22 @@ def load_table(table_name):
     # Fallback to empty DataFrame if no data found
     return pd.DataFrame()
 
-def ensure_time_series_data(df):
+def ensure_data_fallback(df, ist_tz):
     """
-    If the loaded data (likely stocks_df) is only a snapshot (one row per symbol), 
-    this function simulates historical data for chart demonstration.
-    This is only for rendering the chart if the database link is not live.
+    Ensures a basic, single-snapshot DataFrame exists for calculations 
+    if the database load failed completely, avoiding complex history simulation. 
+    This keeps the dashboard lightweight by only providing minimal dummy data.
     """
-    if df.empty or 'timestamp' not in df.columns or df['symbol'].nunique() * 3 > len(df):
-        st.info("Simulating historical data for Trend Graph display since actual time-series data is limited.")
-        
-        # Determine the unique symbols and their latest close price
-        latest_data = df.copy()
-        if not latest_data.empty:
-             latest_data = latest_data.sort_values('timestamp').groupby('symbol').last().reset_index()
-        else:
-             # Create dummy data if everything is empty
-             symbols = ['TCS', 'RELIANCE', 'HDFC', 'INFY', 'ICICI']
-             latest_data = pd.DataFrame({
-                 'symbol': symbols,
-                 'close': np.random.uniform(100, 1000, size=len(symbols)),
-                 'open': np.random.uniform(100, 1000, size=len(symbols)),
-                 'timestamp': [datetime.now(IST)] * len(symbols)
-             })
-             
-        
-        symbols = latest_data['symbol'].unique()
-        simulated_history = []
-        now = datetime.now(IST).replace(second=0, microsecond=0)
-        
-        # Simulate 20 data points over the last hour for each symbol
-        for symbol in symbols:
-            current_close = latest_data[latest_data['symbol'] == symbol]['close'].iloc[0]
-            current_open = latest_data[latest_data['symbol'] == symbol]['open'].iloc[0]
-            
-            # Create a base trend (slightly random walk)
-            prices = [current_close]
-            for _ in range(19):
-                # Small random fluctuation around the previous price, adjusted for open/close difference
-                prices.insert(0, prices[0] + np.random.normal(0, 0.5) + (current_close - current_open) / 20)
-            
-            timestamps = [now - timedelta(minutes=i * 3) for i in range(20)]
-            
-            for t, p in zip(timestamps, prices):
-                simulated_history.append({
-                    'symbol': symbol,
-                    'timestamp': t,
-                    'close': p,
-                    'open': p - np.random.normal(0, 1), # Placeholder for 'open' in history
-                    'volume': np.random.randint(1000, 100000) # Placeholder for 'volume'
-                })
-
-        return pd.DataFrame(simulated_history)
-        
+    if df.empty or 'symbol' not in df.columns:
+         # Create dummy data if everything is empty
+         symbols = ['TCS', 'RELIANCE', 'HDFC', 'INFY', 'ICICI']
+         now = datetime.now(ist_tz)
+         return pd.DataFrame({
+             'symbol': symbols,
+             'close': np.random.uniform(100, 1000, size=len(symbols)),
+             'open': np.random.uniform(100, 1000, size=len(symbols)),
+             'timestamp': [now] * len(symbols)
+         })
     return df
 
 # Load DataFrames
@@ -130,8 +94,9 @@ stocks_df = load_table("stocks")
 buy_sell_df = load_table("buy_sell_predictions")
 news_df = load_table("news_sentiment")
 
-# Ensure stocks_df has enough historical data for the trend graph to render
-stocks_df = ensure_time_series_data(stocks_df)
+# Ensure stocks_df has minimal data if DB/cache load failed
+# This replaces the heavier simulation logic previously used for the removed chart.
+stocks_df = ensure_data_fallback(stocks_df, IST)
 
 
 # =====================================
@@ -203,6 +168,9 @@ def get_upcoming_holidays(now_ist):
 def preprocess_stocks(df, selected_symbols=None):
     """Calculates change percentage and filters by selected symbols.
        Processes data down to the latest snapshot per symbol.
+       
+       Note: We keep the .copy() inside here to ensure the function is pure
+       and doesn't side-effect the cached global DataFrame.
     """
     if df.empty:
         return pd.DataFrame()
@@ -210,7 +178,7 @@ def preprocess_stocks(df, selected_symbols=None):
     df = df.copy()
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        # Get the latest data point for each symbol
+        # Get the latest data point for each symbol (required for current metrics)
         df = df.sort_values('timestamp').groupby('symbol').last().reset_index()
     
     # Filter for selected symbols if provided
@@ -269,10 +237,10 @@ st.sidebar.header("⚙️ Dashboard Controls")
 now_ist = datetime.now(IST)
 today_date = now_ist.date()
 
-# Stock Selector - Used for the Trend Graph and News Filter
+# Stock Selector - Used for the News Filter
 symbols = sorted(stocks_df["symbol"].unique()) if not stocks_df.empty and "symbol" in stocks_df.columns else []
 selected_symbols = st.sidebar.multiselect(
-    "Select Stocks for Trend & News Filter", symbols, default=symbols[:3] if symbols else []
+    "Select Stocks for News Filter", symbols, default=symbols[:3] if symbols else []
 )
 
 # Holiday Notice for TODAY
@@ -290,7 +258,7 @@ if upcoming_hols:
     for date, name, days_away in upcoming_hols:
         holiday_text = f"**{name}** in **{days_away}** days. <span style='font-size:10px;'>({date.strftime('%b %d')})</span>"
         if days_away == 1:
-            holiday_text = f"**{name}** (Tomorrow!) <span style='font-size:10px;'>({date.strftime('%b %d')})</span>"
+            holiday_text = f"**{name}** (Tomorrow!) <span style='font-size:10pt;'>({date.strftime('%b %d')})</span>"
         
         st.sidebar.markdown(holiday_text, unsafe_allow_html=True)
 else:
@@ -304,11 +272,12 @@ if st.sidebar.button("🔄 Refresh All Data", help="Clears cache and reloads dat
 
 
 # =====================================
-# HEADER: Title, Status, and Notification Bell
+# HEADER: Title, Status, and Notification Bell (Replaced popover with expander)
 # =====================================
 status, status_text, _, status_color = get_market_status(now_ist)
 
-col_title, col_status_time, col_bell = st.columns([5, 4, 1])
+# Removed col_bell, distributing space between title and status/time
+col_title, col_status_time = st.columns([6, 4])
 
 with col_title:
     st.markdown("<h1 style='color:#1E90FF;'>FinSight Dashboard 📈</h1>", unsafe_allow_html=True)
@@ -323,19 +292,20 @@ with col_status_time:
         </div>
     """, unsafe_allow_html=True)
 
-with col_bell:
-    st.markdown("<div style='height:20px;'></div>", unsafe_allow_html=True) # Spacer for alignment
-    
-    # Use st.popover for the notification bell
-    popover = st.popover("🔔", help="Show real-time top gainers, losers, and news")
+
+# Use st.expander for a stable, lightweight notification mechanism
+# This is placed full-width right below the header row
+with st.expander("🔔 Real-time Market Snapshot: Top Movers & News", expanded=False):
 
     if not stocks_df.empty:
         # Calculate next update time based on cache TTL (300 seconds)
         next_update_time = now_ist + timedelta(seconds=CACHE_TTL)
-        popover.markdown(f"<p style='margin:0; font-size:12px; color:gray;'>Last Updated: {now_ist.strftime('%H:%M:%S IST')}</p>", unsafe_allow_html=True)
-        popover.markdown(f"<p style='margin:0; font-size:12px; color:gray;'>Next Cache Update: {next_update_time.strftime('%H:%M:%S IST')}</p>", unsafe_allow_html=True)
-        
+        st.markdown(f"<p style='margin:0; font-size:12px; color:gray;'>Last Updated: {now_ist.strftime('%H:%M:%S IST')}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='margin:0; font-size:12px; color:gray;'>Next Cache Update: {next_update_time.strftime('%H:%M:%S IST')}</p>", unsafe_allow_html=True)
+        st.markdown("---", unsafe_allow_html=True)
+
         # Process all stocks for market insights (latest data only)
+        # Using the same data flow but inside the expander
         df_processed_latest = preprocess_stocks(stocks_df, stocks_df["symbol"].unique().tolist()) 
         
         # 1. Get Top 2 Market Gainers/Losers
@@ -343,7 +313,7 @@ with col_bell:
         market_losers = df_processed_latest.nsmallest(2, "change_pct")[["symbol", "change_pct"]]
         
         # 2. Get Top 2 News of the hour (Simulated: latest news)
-        latest_news_df = news_df.copy()
+        latest_news_df = news_df 
         top_news = pd.DataFrame()
 
         if 'timestamp' in latest_news_df.columns:
@@ -351,30 +321,34 @@ with col_bell:
             one_hour_ago = now_ist - timedelta(hours=1)
             
             # Filter news published in the last hour
-            news_last_hour = latest_news_df[latest_news_df['datetime'].dt.tz_localize(IST, errors='coerce') >= one_hour_ago]
+            # Avoiding tz_localize for now due to complexity in data types, relying on naive comparison if possible
+            news_last_hour = latest_news_df[pd.to_datetime(latest_news_df['timestamp']).dt.tz_localize(IST, errors='coerce') >= one_hour_ago]
             
             top_news = news_last_hour.sort_values(by='datetime', ascending=False).head(2)
         else:
             top_news = latest_news_df.head(2) # Fallback if no timestamp
 
-        # Render the notification content inside the popover
-        popover.markdown("<h4 style='color:#1E90FF; margin-top:10px;'>🔥 Market Snapshot</h4>", unsafe_allow_html=True)
+        # Render the notification content inside the expander
+        st.markdown("<h4 style='color:#1E90FF; margin-top:10px;'>🔥 Live Market Movers</h4>", unsafe_allow_html=True)
         
-        popover.markdown("<h5 style='color:green; margin-bottom:5px;'>Top 2 Gainers</h5>", unsafe_allow_html=True)
-        popover.dataframe(market_gainers.style.format({"change_pct": "{:+.2f}%"}).hide(axis="index"), use_container_width=True)
+        col_g, col_l = st.columns(2)
+        with col_g:
+            st.markdown("<h5 style='color:green; margin-bottom:5px;'>Top 2 Gainers</h5>", unsafe_allow_html=True)
+            st.dataframe(market_gainers.style.format({"change_pct": "{:+.2f}%"}).hide(axis="index"), use_container_width=True)
         
-        popover.markdown("<h5 style='color:red; margin-bottom:5px; margin-top:10px;'>Top 2 Losers</h5>", unsafe_allow_html=True)
-        popover.dataframe(market_losers.style.format({"change_pct": "{:+.2f}%"}).hide(axis="index"), use_container_width=True)
+        with col_l:
+            st.markdown("<h5 style='color:red; margin-bottom:5px;'>Top 2 Losers</h5>", unsafe_allow_html=True)
+            st.dataframe(market_losers.style.format({"change_pct": "{:+.2f}%"}).hide(axis="index"), use_container_width=True)
 
-        popover.markdown("<h5 style='margin-top:10px;'>Latest News (Sample)</h5>", unsafe_allow_html=True)
+        st.markdown("<h5 style='margin-top:20px;'>Latest News (Sample)</h5>", unsafe_allow_html=True)
         if not top_news.empty and 'title' in top_news.columns:
              for _, row in top_news.iterrows():
                 sentiment_emoji = "🟢" if row.get("sentiment") == "Bullish" else "🔴" if row.get("sentiment") == "Bearish" else "⚪"
-                popover.markdown(f"**{sentiment_emoji} {row['title']}** - ({row.get('symbol', 'N/A')})", unsafe_allow_html=True)
+                st.markdown(f"**{sentiment_emoji} {row['title']}** - ({row.get('symbol', 'N/A')})", unsafe_allow_html=True)
         else:
-            popover.info("No recent news available.")
+            st.info("No recent news available.")
     else:
-        popover.info("No stock data available for notifications.")
+        st.info("No stock data available for notifications.")
 
 
 # =====================================
@@ -512,14 +486,14 @@ if not news_df.empty and selected_symbols and 'timestamp' in news_df.columns:
     df_filtered_news = news_df[news_df['symbol'].isin(selected_symbols)].copy()
     
     # Ensure datetime format for sorting
-    df_filtered_news['datetime'] = pd.to_datetime(df_filtered_news['timestamp'])
+    df_filtered_news['datetime'] = pd.to_datetime(df_filtered_news['publish_datetime'])
     
     # Get the 2 most recent news items
     top_2_news = df_filtered_news.sort_values(by='datetime', ascending=False).head(2)
     
     if not top_2_news.empty:
         # Prepare data for display
-        display_news = top_2_news[['timestamp', 'symbol', 'title', 'sentiment']].copy()
+        display_news = top_2_news[['publish_datetime', 'symbol', 'title', 'sentiment']].copy()
         
         # Style the sentiment column
         def style_sentiment(s):
@@ -555,39 +529,3 @@ events_data = {
 events_df = pd.DataFrame(events_data)
 
 st.dataframe(events_df.style.set_properties(**{'font-size': '10pt', 'border': '1px solid #ddd'}).hide(axis="index"), use_container_width=True)
-
-
-# =====================================
-# TREND GRAPH (Filtered by Sidebar) 
-# =====================================
-st.markdown("---")
-st.subheader("📊 Price Trend Analysis")
-st.caption("Showing historical price trend for stocks selected in the sidebar.")
-
-if not stocks_df.empty and selected_symbols and 'timestamp' in stocks_df.columns and 'close' in stocks_df.columns:
-    # 1. Filter the full stocks_df (which now includes historical simulation) for selected symbols
-    df_chart = stocks_df[stocks_df["symbol"].isin(selected_symbols)].copy()
-    
-    # Ensure timestamp is datetime type for Altair
-    df_chart['timestamp'] = pd.to_datetime(df_chart['timestamp'])
-    
-    # Filter out any rows with NaT (Not a Time) after conversion
-    df_chart.dropna(subset=['timestamp'], inplace=True)
-
-    if not df_chart.empty:
-        # Create Altair chart
-        chart = alt.Chart(df_chart).mark_line(point=True).encode(
-            x=alt.X('timestamp', title='Time', axis=alt.Axis(format='%H:%M')),
-            y=alt.Y('close', title='Closing Price (INR)'),
-            color=alt.Color('symbol', title='Stock'),
-            tooltip=[alt.Tooltip('timestamp', format='%Y-%m-%d %H:%M:%S'), 'symbol', alt.Tooltip('close', format='.2f')]
-        ).properties(
-            title='Closing Price Trend Over Time'
-        ).interactive() # Allows zooming and panning
-        
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("No historical data available for the selected stocks in the current dataset.")
-
-else:
-    st.info("Please select stocks from the sidebar to view the trend graph.")
