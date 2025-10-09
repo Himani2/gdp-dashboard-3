@@ -1,43 +1,27 @@
-# streamlit
-# pandas
-# plotly
-# sqlalchemy
-# psycopg2-binary
-# requests
-# beautifulsoup4
-# feedparser
-# pytz
-# fpdf
-# matplotlib
-# kaleidogit 
-
+streamlit
+pandas
+plotly
+sqlalchemy
+psycopg2-binary
+requests
+beautifulsoup4
+feedparser
+pytz
+fpdf
+matplotlib
+#kaleidogit 
+yfinance
 
 #-----------chatbot and dashboard--------
-# streamlit
-# pandas
-# pytz
-# plotly
-# sqlalchemy
-# yfinance
+
+
+
 # langchain_openai
 # langchain
 # langchain-community
 # chromadb
 # sentence-transformers
 # timestamp
-# streamlit
-# pandas
-# sqlalchemy
-# psycopg2
-# pytz
-# feedparser
+# altair
 # altair
 
-streamlit
-pandas
-sqlalchemy
-psycopg2-binary
-yfinance
-altair
-pytz
-feedparser
