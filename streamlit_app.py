@@ -111,18 +111,18 @@ with col2:
         unsafe_allow_html=True
     )
 
-# --------------------------------------------------------------------
-# 🧭 DATA FILTERING LOGIC (show Friday data if market closed)
-# --------------------------------------------------------------------
-if not market_open_now:
-    st.warning(f"🛑 Market is closed. Showing last Friday's data ({last_friday_date}).")
+# # --------------------------------------------------------------------
+# # 🧭 DATA FILTERING LOGIC (show Friday data if market closed)
+# # --------------------------------------------------------------------
+# if not market_open_now:
+#     st.warning(f"🛑 Market is closed. Showing last Friday's data ({last_friday_date}).")
 
-    # Filter stock data to show only up to last Friday
-    try:
-        stocks_df["timestamp"] = pd.to_datetime(stocks_df["timestamp"])
-        stocks_df = stocks_df[stocks_df["timestamp"].dt.date == pd.Timestamp(last_friday_date).date()]
-    except Exception as e:
-        st.error(f"Error filtering Friday data: {e}")
+#     # Filter stock data to show only up to last Friday
+#     try:
+#         stocks_df["timestamp"] = pd.to_datetime(stocks_df["timestamp"])
+#         stocks_df = stocks_df[stocks_df["timestamp"].dt.date == pd.Timestamp(last_friday_date).date()]
+#     except Exception as e:
+#         st.error(f"Error filtering Friday data: {e}")
 
 
         
@@ -264,12 +264,15 @@ if selected_stock:
         st.info(f"No prediction available for {selected_stock}.")
 
 #--------------------Price Trend--------------------------------    
-# st.subheader("📈 Price Trend")
+st.subheader("📈 Price Trend")
 if not stocks_df.empty:
     fig = px.line(stocks_df[stocks_df["symbol"].isin(selected_symbols)],
                   x="timestamp", y="close", color="symbol",
                   title="Stock Closing Prices")
     st.plotly_chart(fig, use_container_width=True)
+
+
+
 
 # -------------------------
 # Compute percentage change
