@@ -11,7 +11,9 @@ fpdf
 matplotlib
 #kaleidogit 
 yfinance
-
+seaborn
+google-genai
+python-dotenv
 #-----------chatbot and dashboard--------
 
 
